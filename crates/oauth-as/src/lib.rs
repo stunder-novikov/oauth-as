@@ -243,6 +243,7 @@ pub mod dpop;
 pub mod error;
 pub mod events;
 pub mod grant;
+pub mod issuance;
 // PRIVATE, and one function long: the lower-case hex encoder that `server` (device codes,
 // authorization codes, opaque tokens) and `client` (the stored secret verifier) both need. It sits
 // here for the reason `skew` does, and it was two copies of one loop until 0.9.1.

@@ -1441,6 +1441,11 @@ pub struct AccessTokenClaims {
     #[cfg_attr(docsrs, doc(cfg(feature = "token-exchange")))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub act: Option<crate::token_exchange::ActClaim>,
+    /// Claims the host's [`crate::issuance::IssuancePolicy`] added, as top-level members (RFC
+    /// 9068 section 2.2.3). Never one of the names above: see
+    /// [`crate::issuance::RESERVED_CLAIMS`].
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl AccessTokenClaims {
@@ -1483,6 +1488,7 @@ impl AccessTokenClaims {
             // The required-set constructor: a delegation is not one of the seven.
             #[cfg(feature = "token-exchange")]
             act: None,
+            extra: serde_json::Map::new(),
         }
     }
 }

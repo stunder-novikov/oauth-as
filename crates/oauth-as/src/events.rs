@@ -629,6 +629,7 @@ struct Installed {
     rate_limiter: Option<Box<dyn RateLimiter>>,
     secret_verifier: Option<Box<dyn SecretVerifier>>,
     registration_policy: Option<Box<dyn RegistrationPolicy>>,
+    issuance_policy: Option<Box<dyn crate::issuance::IssuancePolicy>>,
     #[cfg(feature = "jar")]
     request_object_keys: Option<Box<dyn crate::par::RequestObjectKeys>>,
     /// The host's installed asymmetric verifiers, one slot per [`crate::jwt::JwsAlg`], for
@@ -684,6 +685,14 @@ impl Hooks {
     /// Install the client secret verifier, replacing any previous one.
     pub(crate) fn install_secret_verifier(&mut self, verifier: Box<dyn SecretVerifier>) {
         self.installed().secret_verifier = Some(verifier);
+    }
+
+    /// Install the issuance policy, replacing any previous one.
+    pub(crate) fn install_issuance_policy(
+        &mut self,
+        policy: Box<dyn crate::issuance::IssuancePolicy>,
+    ) {
+        self.installed().issuance_policy = Some(policy);
     }
 
     /// Install the RFC 7591 registration policy, replacing any previous one.
@@ -794,6 +803,14 @@ impl Hooks {
     pub fn secret_verifier(&self) -> Option<&dyn SecretVerifier> {
         match &self.0 {
             Some(installed) => installed.secret_verifier.as_deref(),
+            None => None,
+        }
+    }
+
+    /// The installed issuance policy, if any.
+    pub fn issuance_policy(&self) -> Option<&dyn crate::issuance::IssuancePolicy> {
+        match &self.0 {
+            Some(installed) => installed.issuance_policy.as_deref(),
             None => None,
         }
     }

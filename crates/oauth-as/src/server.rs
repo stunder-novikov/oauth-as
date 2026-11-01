@@ -2104,6 +2104,16 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
         self
     }
 
+    /// Install the issuance policy: the host's last word on every token, and the claims it adds.
+    /// See [`crate::issuance`].
+    pub fn with_issuance_policy(
+        mut self,
+        policy: Box<dyn crate::issuance::IssuancePolicy>,
+    ) -> Self {
+        self.hooks.install_issuance_policy(policy);
+        self
+    }
+
     /// Install the RFC 7591 registration policy: who may create a client here.
     ///
     /// Required, not optional, for any host that sets [`ServerConfig::registration`]: with no
@@ -2396,6 +2406,8 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
         // the signed claim and the persisted record must be the one value stated twice, and the
         // record is written after this returns.
         authentication: &GrantedAuthentication,
+        // The host's `IssuancePolicy` claims, already checked against the reserved names.
+        extra: crate::issuance::ExtraClaims,
     ) -> Result<Result<(&crate::jwt::JwtConfig, String), String>, ErrorResponse> {
         // Only the RFC 8705 binding is read out of it here; without that feature the
         // signed claim set does not depend on how the client authenticated.
@@ -2505,6 +2517,7 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
             // resource server that never introspects, so the record alone would not reach it.
             #[cfg(feature = "token-exchange")]
             act: actor.act.as_deref().cloned(),
+            extra: extra.claims,
         };
         // `claims` dies HERE, before the caller awaits the signature. See this function's doc.
         jwt.signing_input(&claims)
@@ -6246,6 +6259,26 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
         // Likewise: without `rar` the details are a zero sized value nothing reads.
         #[cfg(not(feature = "rar"))]
         let _ = details;
+        // THE HOST'S LAST WORD, once per issued token on every grant: after every check this crate
+        // makes, before anything is drawn, signed or written. A refusal returns here, so nothing
+        // of this issuance exists; what the grant already consumed stays consumed. See
+        // `crate::issuance`.
+        let extra = match self.hooks.issuance_policy() {
+            Some(policy) => {
+                let issuance = crate::issuance::IssuanceContext {
+                    client,
+                    grant_type,
+                    subject: subject.as_deref(),
+                    scope: &scope,
+                    resource: &resource,
+                    grant_established_at,
+                };
+                policy.check(&issuance).await?
+            }
+            None => crate::issuance::ExtraClaims::default(),
+        };
+        #[cfg(not(feature = "jwt"))]
+        let _ = extra;
         let now = self.clock.now();
         // ONE expiry instant, computed ONCE and used by all three places that state it: the
         // persisted record, the RFC 9068 `exp` claim, and the RFC 6749 s5.1 `expires_in` member. A
@@ -6345,6 +6378,7 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
             bound,
             &actor,
             &authentication,
+            extra,
         )?;
         #[cfg(feature = "jwt")]
         let access_token = match prepared {
