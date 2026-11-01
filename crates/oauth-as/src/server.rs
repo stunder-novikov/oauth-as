@@ -480,6 +480,13 @@ pub struct ServerConfig {
     /// collides on. Clamping rather than rejecting keeps a misconfiguration from becoming a
     /// runtime failure at the one moment a user is standing in front of a device.
     pub user_code_length: usize,
+    /// Whether a public client's registered `http://localhost` redirect also matches with any
+    /// port, as its `127.0.0.1` and `[::1]` redirects always do (RFC 8252 section 7.3).
+    ///
+    /// Defaults to `false`. RFC 8252 section 8.3 says NOT RECOMMENDED for `localhost`: the name
+    /// may resolve to a non-loopback interface, or be answered by a firewall. A host whose native
+    /// clients register `localhost` anyway (some CLI tools do) opts in.
+    pub loopback_redirect_localhost: bool,
 }
 
 /// The floor [`ServerConfig::user_code_length`] is clamped up to: the RFC 8628 section 6.1 example
@@ -900,6 +907,46 @@ pub enum AssertionAudience {
     IssuerOnly,
 }
 
+/// Splits an `http://` loopback URI into `(host, port, rest)`, where `rest` starts at the first
+/// `/`, `?` or `#` after the authority. `None` for anything else: another scheme, userinfo, a
+/// host that is not `127.0.0.1` / `[::1]` (or `localhost` when allowed), or a malformed port.
+fn split_loopback(uri: &str, localhost: bool) -> Option<(&str, &str, &str)> {
+    let after = uri.strip_prefix("http://")?;
+    let end = after.find(['/', '?', '#']).unwrap_or(after.len());
+    let (authority, rest) = after.split_at(end);
+    let (host, port) = if authority.starts_with('[') {
+        let close = authority.find(']')? + 1;
+        let (host, tail) = authority.split_at(close);
+        match tail {
+            "" => (host, None),
+            _ => (host, Some(tail.strip_prefix(':')?)),
+        }
+    } else {
+        match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        }
+    };
+    let loopback = host == "127.0.0.1" || host == "[::1]" || (localhost && host == "localhost");
+    // A present port is 1-5 digits within u16; a bare trailing `:` is refused, not read as none.
+    let port_ok = port.map_or(true, |p| {
+        p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u16>().is_ok()
+    });
+    (loopback && port_ok).then_some((host, port.unwrap_or(""), rest))
+}
+
+/// RFC 8252 section 7.3: `requested` equals `registered` in everything but the port, and both are
+/// loopback `http` URIs. Host and the rest compare as exact strings, as the exact match does.
+fn loopback_match_ignoring_port(registered: &str, requested: &str, localhost: bool) -> bool {
+    match (
+        split_loopback(registered, localhost),
+        split_loopback(requested, localhost),
+    ) {
+        (Some((rh, _, rr)), Some((qh, _, qr))) => rh == qh && rr == qr,
+        _ => false,
+    }
+}
+
 impl ServerConfig {
     /// A config with RFC-shaped defaults; `issuer` and `verification_uri` have no sane default and
     /// are required.
@@ -963,6 +1010,8 @@ impl ServerConfig {
             #[cfg(feature = "client-assertion")]
             assertion_audience: AssertionAudience::Rfc7523,
             user_code_length: MIN_USER_CODE_LENGTH,
+            // OFF. RFC 8252 s8.3: see the field's own docs.
+            loopback_redirect_localhost: false,
         }
     }
 
@@ -4483,6 +4532,19 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
                 .iter()
                 .find(|registered| registered.as_str() == requested)
                 .cloned()
+                // RFC 8252 section 7.3: a native (public) client's loopback IP redirect matches
+                // with ANY port, because the app binds an ephemeral one. Every other part stays
+                // exact, and the URI kept is the one PRESENTED, so the token endpoint's own exact
+                // comparison then pins the code to that port.
+                .or_else(|| {
+                    let public = matches!(client.auth, crate::client::ClientAuth::Public);
+                    let localhost = self.config.loopback_redirect_localhost;
+                    (public
+                        && client.redirect_uris.iter().any(|registered| {
+                            loopback_match_ignoring_port(registered, requested, localhost)
+                        }))
+                    .then(|| requested.to_string())
+                })
                 .ok_or_else(|| {
                     direct(
                         ErrorCode::InvalidRequest,
