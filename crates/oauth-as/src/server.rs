@@ -3175,7 +3175,7 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
                 // told which refusal it was one line up; the wire is told nothing, because the
                 // difference between "no such client", "expired", "wrong secret" and "wrong kind of
                 // credential" is exactly what tells a caller that an id is real.
-                Err(ErrorResponse::new(ErrorCode::InvalidClient))
+                Err(ErrorResponse::new(ErrorCode::InvalidClient).with_client_auth_failure(failure))
             }
         }
     }
@@ -3200,7 +3200,8 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
             });
             // The same `invalid_client` a wrong secret gets. A distinct code would tell an
             // attacker that they had found a live client id and merely hit the throttle.
-            return Err(ErrorResponse::new(ErrorCode::InvalidClient));
+            return Err(ErrorResponse::new(ErrorCode::InvalidClient)
+                .with_client_auth_failure(ClientAuthFailure::RateLimited));
         }
         Ok(())
     }
@@ -5431,7 +5432,8 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
                 client_id: client_id.as_str(),
                 failure: ClientAuthFailure::NotConfidential,
             });
-            return Err(ErrorResponse::new(ErrorCode::InvalidClient));
+            return Err(ErrorResponse::new(ErrorCode::InvalidClient)
+                .with_client_auth_failure(ClientAuthFailure::NotConfidential));
         }
         if !client.allows_grant(GrantType::ClientCredentials) {
             return Err(ErrorResponse::new(ErrorCode::UnauthorizedClient));
@@ -6708,7 +6710,8 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
                 client_id: client_id.as_str(),
                 failure: ClientAuthFailure::NotConfidential,
             });
-            return Err(ErrorResponse::new(ErrorCode::InvalidClient));
+            return Err(ErrorResponse::new(ErrorCode::InvalidClient)
+                .with_client_auth_failure(ClientAuthFailure::NotConfidential));
         }
         let record = self.introspect(token).await.map_err(storage_error)?;
         // WHOSE QUESTION IS THIS. RFC 7662 has two legitimate callers and they are answered from

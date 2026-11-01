@@ -451,10 +451,11 @@ fn authorization_response_location_encodes_and_separates_correctly() {
 fn authorization_error_redirect_location_carries_every_present_member() {
     let full = AuthorizationErrorRedirect {
         redirect_uri: "https://app.example/cb?tenant=acme".to_string(),
-        error: ErrorResponse {
-            error: ErrorCode::InvalidScope,
-            error_description: Some("scope [a&b] exceeds".into()),
-            error_uri: Some("https://as.example/docs#scope".into()),
+        error: {
+            let mut e =
+                ErrorResponse::new(ErrorCode::InvalidScope).with_description("scope [a&b] exceeds");
+            e.error_uri = Some("https://as.example/docs#scope".into());
+            e
         },
         state: Some("s t".to_string()),
         iss: "https://as.example".to_string(),

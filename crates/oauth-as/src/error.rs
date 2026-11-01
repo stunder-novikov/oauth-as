@@ -253,7 +253,7 @@ impl fmt::Display for ErrorCode {
 /// A host that needs a description it computed still passes a `String`: `Cow` owns that case, and
 /// [`ErrorResponse::with_description`] takes `impl Into<Cow<'static, str>>` so both spellings
 /// compile unchanged.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorResponse {
     /// The registered error code.
     pub error: ErrorCode,
@@ -263,7 +263,24 @@ pub struct ErrorResponse {
     /// A URI identifying a human-readable page with more information.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_uri: Option<Cow<'static, str>>,
+    /// Which client-authentication refusal this is, for the HOST only: see
+    /// [`ErrorResponse::client_auth_failure`]. Never serialized.
+    #[serde(skip)]
+    pub(crate) client_auth_failure: Option<crate::events::ClientAuthFailure>,
 }
+
+/// EQUALITY IS THE WIRE'S: `client_auth_failure` is left out, because two refusals the wire
+/// cannot tell apart (an unknown client and a wrong secret) must stay equal values, which is what
+/// the crate's anti-enumeration tests assert.
+impl PartialEq for ErrorResponse {
+    fn eq(&self, other: &Self) -> bool {
+        self.error == other.error
+            && self.error_description == other.error_description
+            && self.error_uri == other.error_uri
+    }
+}
+
+impl Eq for ErrorResponse {}
 
 impl ErrorResponse {
     /// A bare error with no description.
@@ -272,7 +289,26 @@ impl ErrorResponse {
             error,
             error_description: None,
             error_uri: None,
+            client_auth_failure: None,
         }
+    }
+
+    /// Which client-authentication refusal produced this `invalid_client`, if one did.
+    ///
+    /// The same value [`crate::events::Event::ClientAuthenticationFailed`] reports to the event
+    /// sink, returned with the error so a host can act on it in the request that caused it (count a
+    /// wrong secret, but not an unknown id) without correlating the two. The wire still carries
+    /// the one bare `invalid_client`: this member is skipped by serialization.
+    pub fn client_auth_failure(&self) -> Option<crate::events::ClientAuthFailure> {
+        self.client_auth_failure
+    }
+
+    pub(crate) fn with_client_auth_failure(
+        mut self,
+        failure: crate::events::ClientAuthFailure,
+    ) -> Self {
+        self.client_auth_failure = Some(failure);
+        self
     }
 
     /// Attach a developer-facing description.
