@@ -487,6 +487,20 @@ pub struct ServerConfig {
     /// may resolve to a non-loopback interface, or be answered by a firewall. A host whose native
     /// clients register `localhost` anyway (some CLI tools do) opts in.
     pub loopback_redirect_localhost: bool,
+    /// Whether a requested scope wider than the client's `allowed_scopes` is NARROWED to the
+    /// allowed part instead of refused (RFC 6749 section 3.3: the server "MAY fully or partially
+    /// ignore the scope requested by the client").
+    ///
+    /// Defaults to `false`: the request is refused with `invalid_scope`, which tells a developer
+    /// at once that the registration and the request disagree. With it on:
+    /// - the authorization endpoint narrows, and still refuses when NOTHING requested is allowed;
+    /// - the token endpoint's `client_credentials` grant (and the device grant) narrow, and an
+    ///   empty intersection is returned as an empty scope rather than refused, so a host's own
+    ///   policy decides what an empty grant means.
+    ///
+    /// The granted scope is reported in the token response, as section 3.3 requires when it
+    /// differs from the request.
+    pub narrow_requested_scope: bool,
 }
 
 /// The floor [`ServerConfig::user_code_length`] is clamped up to: the RFC 8628 section 6.1 example
@@ -1012,6 +1026,8 @@ impl ServerConfig {
             user_code_length: MIN_USER_CODE_LENGTH,
             // OFF. RFC 8252 s8.3: see the field's own docs.
             loopback_redirect_localhost: false,
+            // OFF. A refusal is the clearer default; see the field's own docs.
+            narrow_requested_scope: false,
         }
     }
 
@@ -3739,6 +3755,7 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
     fn resolve_scope(
         client: &Client,
         requested: Option<&ScopeSet>,
+        narrow: bool,
     ) -> Result<ScopeSet, ErrorResponse> {
         match requested {
             // INTERSECTED, not taken whole, and that is a fix for a defect the 0.9.1 rotation
@@ -3758,6 +3775,8 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
             // than defensive.
             None => Ok(Self::granted_default_scope(client)),
             Some(s) if s.is_subset(&client.allowed_scopes) => Ok(s.clone()),
+            // `ServerConfig::narrow_requested_scope`: the allowed part, empty included.
+            Some(s) if narrow => Ok(s.intersection(&client.allowed_scopes)),
             // NB: descriptions must stay inside the RFC 6749 section 5.2 charset (no double
             // quote, no backslash), which scope tokens themselves already satisfy.
             // BORROWED, not built. This refusal is reachable by an UNAUTHENTICATED caller at the
@@ -3821,7 +3840,8 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
             return Err(ErrorResponse::new(ErrorCode::UnauthorizedClient)
                 .with_description("client registration does not include the device_code grant"));
         }
-        let scope = Self::resolve_scope(&client, requested_scope)?;
+        let scope =
+            Self::resolve_scope(&client, requested_scope, self.config.narrow_requested_scope)?;
 
         let now = self.clock.now();
         // `?` rather than a panic: this is an unauthenticated-shaped request path like any
@@ -4647,13 +4667,19 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
             Some(s) => {
                 let requested = ScopeSet::parse(s)
                     .map_err(|_| redirect(ErrorCode::InvalidScope, "malformed scope"))?;
-                if !requested.is_subset(&client.allowed_scopes) {
-                    return Err(redirect(
-                        ErrorCode::InvalidScope,
-                        "requested scope exceeds the client registration",
-                    ));
+                if requested.is_subset(&client.allowed_scopes) {
+                    requested
+                } else {
+                    // `ServerConfig::narrow_requested_scope`: the allowed part, but never nothing.
+                    let narrowed = requested.intersection(&client.allowed_scopes);
+                    if !self.config.narrow_requested_scope || narrowed.is_empty() {
+                        return Err(redirect(
+                            ErrorCode::InvalidScope,
+                            "requested scope exceeds the client registration",
+                        ));
+                    }
+                    narrowed
                 }
-                requested
             }
         };
 
@@ -5438,7 +5464,8 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
         if !client.allows_grant(GrantType::ClientCredentials) {
             return Err(ErrorResponse::new(ErrorCode::UnauthorizedClient));
         }
-        let scope = Self::resolve_scope(&client, requested_scope)?;
+        let scope =
+            Self::resolve_scope(&client, requested_scope, self.config.narrow_requested_scope)?;
         // Section 4.4.3: a refresh token SHOULD NOT be included. The client holds its own
         // credentials and can mint another token whenever it likes, so a refresh token would be a
         // second long-lived secret bought for nothing.

@@ -204,6 +204,17 @@ impl ScopeSet {
         self.0.iter().any(|s| s.as_str() == token)
     }
 
+    /// The tokens present in both sets. Still sorted and deduplicated, since `self` is.
+    pub fn intersection(&self, other: &ScopeSet) -> ScopeSet {
+        ScopeSet(
+            self.0
+                .iter()
+                .filter(|s| other.contains(s.as_str()))
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// Iterate tokens in lexicographic order.
     pub fn iter(&self) -> impl Iterator<Item = &Scope> {
         self.0.iter()
