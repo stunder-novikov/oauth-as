@@ -3209,6 +3209,34 @@ impl<S: Storage, C: Clock> AuthorizationServer<S, C> {
         }
     }
 
+    /// Client authentication alone, for a host that must answer a refused client before refusing
+    /// the rest of the request.
+    ///
+    /// The token and revocation endpoints authenticate the client before anything they read from the
+    /// request (RFC 6749 section 3.2.1), and a host that checks request syntax itself, ahead of
+    /// [`AuthorizationServer::token_with_context`], would otherwise answer that syntax first. This
+    /// is the same client authentication every endpoint runs: the rate-limit
+    /// gate, one credential decision, one exit, and the refusal's
+    /// [`ErrorResponse::client_auth_failure`] verdict. It issues nothing and changes no state but the
+    /// limiter's and the event sink's.
+    pub async fn authenticate_client_credential(
+        &self,
+        client_id: &ClientId,
+        cred: &ClientCredential<'_>,
+    ) -> Result<(), ErrorResponse> {
+        self.authenticate_client(client_id, cred).await.map(|_| ())
+    }
+
+    /// The RFC 8707 `resource` checks [`AuthorizationServer::token_with_context`] runs before it
+    /// authenticates the client: the count, the syntax and whether this server issues for the
+    /// resource at all. For a host that must authenticate first when one of them would refuse.
+    pub fn check_resource_indicators<'a>(
+        &self,
+        requested: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), ErrorResponse> {
+        self.validate_resources(requested).map(|_| ())
+    }
+
     /// The host's [`RateLimiter`] gate, asked FIRST, before the store is touched.
     ///
     /// SEPARATE FROM THE CREDENTIAL DECISION on purpose; see "ONE EXIT" on

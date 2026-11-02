@@ -12,6 +12,12 @@ whatever version is current at each real crates.io release appear as published o
 
 ## [Unreleased]
 
+### Added
+
+- `AuthorizationServer::authenticate_client_credential` (client authentication alone, with the refusal's
+  verdict) and `AuthorizationServer::check_resource_indicators` (the token endpoint's RFC 8707 checks), for a
+  host that must answer a refused client before refusing the rest of the request.
+
 ## [1.0.0] - 2026-09-23
 
 First stable release. No library code, public API, or wire behaviour changes vs 0.11.2: the 0.11
